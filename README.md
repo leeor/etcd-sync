@@ -23,6 +23,3 @@ mutex.Lock()
 // do some critical stuff
 mutex.Unlock()
 ~~~
-
-# Author
-Leeor Aharon <leeor DOT aharon AT gmail DOT com>.
