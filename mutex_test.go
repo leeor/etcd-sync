@@ -196,7 +196,6 @@ func HammerMutex(m *EtcdMutex, loops int, cdone chan bool, t *testing.T) {
 }
 
 func TestMutex(t *testing.T) {
-	key := "/test/hammer_mutex"
 	client := etcd.NewClient([]string{"http://127.0.0.1:4001"})
 	client.Delete(key, true)
 
