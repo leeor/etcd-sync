@@ -195,13 +195,27 @@ func HammerMutex(m *EtcdMutex, loops int, cdone chan bool, t *testing.T) {
 	cdone <- true
 }
 
-func TestMutex(t *testing.T) {
+func TestConcurrentSingleMutex(t *testing.T) {
 	client := etcd.NewClient([]string{"http://127.0.0.1:4001"})
 	client.Delete(key, true)
 
 	m := NewMutexFromClient(client, key, 0)
 	c := make(chan bool)
 	for i := 0; i < 10; i++ {
+		go HammerMutex(m, 1000, c, t)
+	}
+	for i := 0; i < 10; i++ {
+		<-c
+	}
+}
+
+func TestConcurrentMultipleMutex(t *testing.T) {
+	client := etcd.NewClient([]string{"http://127.0.0.1:4001"})
+	client.Delete(key, true)
+
+	c := make(chan bool)
+	for i := 0; i < 10; i++ {
+		m := NewMutexFromClient(client, key, 0)
 		go HammerMutex(m, 1000, c, t)
 	}
 	for i := 0; i < 10; i++ {
