@@ -185,7 +185,6 @@ func (m *EtcdMutex) Lock() error {
 							// pretty bad, but the we were about to release it
 							// anyway.
 							glog.Infof("[%s] no such key error when trying to release lock", m.key)
-							break
 
 						case 101:
 							// either the prevValue or prevIndex arguments
@@ -195,9 +194,10 @@ func (m *EtcdMutex) Lock() error {
 							// the TTL was not set to 0, it will become usable
 							// again with time.
 							glog.Infof("[%s] CAS failed when trying to release lock (%s)", m.key, etcderr.Cause)
-							break
 
 						default:
+							// as long as the stops getting refreshed, the mutex
+							// will get "unlocked" one the key expires.
 							glog.Infof("[%s] unexpected error: %#v", m.key, etcderr)
 						}
 					}

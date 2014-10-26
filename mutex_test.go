@@ -24,6 +24,7 @@ func TestTwoNoKey(t *testing.T) {
 
 	quit1 := make(chan bool)
 	quit2 := make(chan bool)
+	errchan := make(chan bool)
 
 	progress := make(chan bool)
 
@@ -31,7 +32,11 @@ func TestTwoNoKey(t *testing.T) {
 	go func() {
 
 		mutex := NewMutexFromClient(client, key, 0)
-		mutex.Lock()
+		err := mutex.Lock()
+		if err != nil {
+
+			errchan <- true
+		}
 
 		progress <- true
 
@@ -42,7 +47,11 @@ func TestTwoNoKey(t *testing.T) {
 		quit1 <- true
 	}()
 
-	<-progress
+	select {
+	case <-progress:
+	case <-errchan:
+		t.Fatal("could not acquire lock, is etcd running?")
+	}
 
 	// second thread
 	go func() {
@@ -52,7 +61,13 @@ func TestTwoNoKey(t *testing.T) {
 		// should take us 5 seconds to acquire the lock
 		now := time.Now()
 
-		mutex.Lock()
+		err := mutex.Lock()
+		if err != nil {
+
+			t.Fatal("could not acquire lock, is etcd running?", err)
+			errchan <- true
+		}
+
 		timeToLock := time.Since(now)
 		if timeToLock < 5*time.Second {
 
@@ -63,8 +78,21 @@ func TestTwoNoKey(t *testing.T) {
 		quit2 <- true
 	}()
 
-	<-quit1
-	<-quit2
+	var (
+		q1 bool
+		q2 bool
+	)
+
+	for !q1 || !q2 {
+		select {
+		case <-quit1:
+			q1 = true
+		case <-quit2:
+			q2 = true
+		case <-errchan:
+			t.Fatal("could not acquire lock, is etcd running?")
+		}
+	}
 }
 
 func TestTwoExistingKey(t *testing.T) {
@@ -76,6 +104,7 @@ func TestTwoExistingKey(t *testing.T) {
 
 	quit1 := make(chan bool)
 	quit2 := make(chan bool)
+	errchan := make(chan bool)
 
 	progress := make(chan bool)
 
@@ -83,7 +112,11 @@ func TestTwoExistingKey(t *testing.T) {
 	go func() {
 
 		mutex := NewMutexFromServers([]string{"http://127.0.0.1:4001"}, key, 0)
-		mutex.Lock()
+		err := mutex.Lock()
+		if err != nil {
+
+			errchan <- true
+		}
 
 		progress <- true
 
@@ -94,7 +127,11 @@ func TestTwoExistingKey(t *testing.T) {
 		quit1 <- true
 	}()
 
-	<-progress
+	select {
+	case <-progress:
+	case <-errchan:
+		t.Fatal("could not acquire lock, is etcd running?")
+	}
 
 	// second thread
 	go func() {
@@ -104,7 +141,12 @@ func TestTwoExistingKey(t *testing.T) {
 		// should take us 5 seconds to acquire the lock
 		now := time.Now()
 
-		mutex.Lock()
+		err := mutex.Lock()
+		if err != nil {
+
+			errchan <- true
+		}
+
 		timeToLock := time.Since(now)
 		if timeToLock < 5*time.Second {
 
@@ -115,8 +157,21 @@ func TestTwoExistingKey(t *testing.T) {
 		quit2 <- true
 	}()
 
-	<-quit1
-	<-quit2
+	var (
+		q1 bool
+		q2 bool
+	)
+
+	for !q1 || !q2 {
+		select {
+		case <-quit1:
+			q1 = true
+		case <-quit2:
+			q2 = true
+		case <-errchan:
+			t.Fatal("could not acquire lock, is etcd running?")
+		}
+	}
 }
 
 func TestUnlockReleased(t *testing.T) {
@@ -146,7 +201,12 @@ func TestUnlockNoKey(t *testing.T) {
 
 	mutex := NewMutexFromClient(client, key, 0)
 
-	mutex.Lock()
+	err := mutex.Lock()
+	if err != nil {
+
+		t.Fatal("could not acquire lock, is etcd running?", err)
+	}
+
 	client.Delete(key, false)
 	time.Sleep(2 * time.Second)
 	mutex.Unlock()
@@ -161,14 +221,25 @@ func _TestUnlockBadIndex(t *testing.T) {
 
 	mutex := NewMutexFromClient(client, key, 0)
 
-	mutex.Lock()
+	err := mutex.Lock()
+	if err != nil {
+
+		t.Fatal("could not acquire lock, is etcd running?", err)
+	}
+
 	client.Update(key, "locked", 0)
 	mutex.Unlock()
 
 	trigger := make(chan bool)
+	errchan := make(chan bool)
 	go func() {
 
-		mutex.Lock()
+		err := mutex.Lock()
+		if err != nil {
+
+			errchan <- true
+		}
+
 		trigger <- true
 		mutex.Unlock()
 	}()
@@ -176,6 +247,8 @@ func _TestUnlockBadIndex(t *testing.T) {
 	tick := time.Tick(time.Second)
 
 	select {
+	case <-errchan:
+		t.Fatal("could not acquire lock, is etcd running?", err)
 	case <-trigger:
 		t.Fatalf("managed to get a lock on an out of sync mutex")
 		break
@@ -185,10 +258,16 @@ func _TestUnlockBadIndex(t *testing.T) {
 	}
 }
 
-func HammerMutex(m *EtcdMutex, loops int, cdone chan bool, t *testing.T) {
+func HammerMutex(m *EtcdMutex, loops int, cdone chan bool, errchan chan error, t *testing.T) {
 	log.Printf("starting %d iterations", loops)
 	for i := 0; i < loops; i++ {
-		m.Lock()
+		err := m.Lock()
+		if err != nil {
+
+			errchan <- err
+			return
+		}
+
 		m.Unlock()
 	}
 	log.Printf("completed all iterations")
@@ -201,11 +280,16 @@ func TestConcurrentSingleMutex(t *testing.T) {
 
 	m := NewMutexFromClient(client, key, 0)
 	c := make(chan bool)
+	e := make(chan error)
 	for i := 0; i < 10; i++ {
-		go HammerMutex(m, 1000, c, t)
+		go HammerMutex(m, 100, c, e, t)
 	}
 	for i := 0; i < 10; i++ {
-		<-c
+		select {
+		case <-c:
+		case err := <-e:
+			t.Fatal("could not acquire lock, is etcd running?", err)
+		}
 	}
 }
 
@@ -214,12 +298,17 @@ func TestConcurrentMultipleMutex(t *testing.T) {
 	client.Delete(key, true)
 
 	c := make(chan bool)
+	e := make(chan error)
 	for i := 0; i < 10; i++ {
 		m := NewMutexFromClient(client, key, 0)
-		go HammerMutex(m, 1000, c, t)
+		go HammerMutex(m, 100, c, e, t)
 	}
 	for i := 0; i < 10; i++ {
-		<-c
+		select {
+		case <-c:
+		case err := <-e:
+			t.Fatal("could not acquire lock, is etcd running?", err)
+		}
 	}
 }
 
@@ -234,7 +323,12 @@ func TestMutexPanic(t *testing.T) {
 	client.Delete(key, true)
 
 	mu := NewMutexFromClient(client, key, 0)
-	mu.Lock()
+	err := mu.Lock()
+	if err != nil {
+
+		t.Fatal("could not acquire lock, is etcd running?", err)
+	}
+
 	mu.Unlock()
 	mu.Unlock()
 }
@@ -252,7 +346,12 @@ func BenchmarkMutexUncontended(b *testing.B) {
 		mu := PaddedMutex{EtcdMutex: NewMutexFromClient(client, key, 0)}
 
 		for pb.Next() {
-			mu.Lock()
+			err := mu.Lock()
+			if err != nil {
+
+				b.Fatal("could not acquire lock, is etcd running?", err)
+			}
+
 			mu.Unlock()
 		}
 	})
@@ -269,7 +368,12 @@ func benchmarkMutex(b *testing.B, slack, work bool) {
 	b.RunParallel(func(pb *testing.PB) {
 		foo := 0
 		for pb.Next() {
-			mu.Lock()
+			err := mu.Lock()
+			if err != nil {
+
+				b.Fatal("could not acquire lock, is etcd running?", err)
+			}
+
 			mu.Unlock()
 			if work {
 				for i := 0; i < 100; i++ {
