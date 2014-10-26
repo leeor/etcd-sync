@@ -1,6 +1,7 @@
 package etcdsync
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/coreos/go-etcd/etcd"
@@ -78,7 +79,7 @@ func (m *EtcdMutex) setDebug(on bool) {
 	m.debug = on
 }
 
-func (m *EtcdMutex) Lock() {
+func (m *EtcdMutex) Lock() error {
 
 	var (
 		state lockState = unknown
@@ -153,8 +154,7 @@ func (m *EtcdMutex) Lock() {
 
 				default:
 					glog.Infof("[%s] unexpected error: %#v", m.key, etcderr)
-					state = released
-					index = etcderr.Index
+					return fmt.Errorf("Unexpected error trying to acquire lock on key %s: %s", m.key, etcderr)
 				}
 			}
 		}
@@ -226,6 +226,7 @@ func (m *EtcdMutex) Lock() {
 
 	m.state = state
 	glog.Infof("[%s] done", m.key)
+	return nil
 }
 
 func (m *EtcdMutex) Unlock() {
